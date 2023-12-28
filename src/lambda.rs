@@ -4,6 +4,9 @@ use nom::combinator::{fail, value};
 use nom::error::ParseError;
 use nom::sequence::delimited;
 use nom::IResult;
+use nom::Parser as _;
+
+use crate::nom_ext;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Lambda {
@@ -71,36 +74,11 @@ where
     ));
 
     let parse_op = value(app, space0);
-    chainl1(parse_expr, parse_op)(input)
-}
-
-pub fn chainl1<'a, T, Op, Error>(
-    mut term: impl FnMut(&'a str) -> IResult<&'a str, T, Error>,
-    mut binary_op: impl FnMut(&'a str) -> IResult<&'a str, Op, Error>,
-) -> impl FnMut(&'a str) -> IResult<&'a str, T, Error>
-where
-    Error: ParseError<&'a str>,
-    Op: Fn(T, T) -> T,
-{
-    move |input: &'a str| {
-        let (mut input, mut lhs) = term(input)?;
-        while let Ok((rest, (op, rhs))) = binary_op(input)
-            .and_then(|(input, op)| term(input).map(|(input, rhs)| (input, (op, rhs))))
-        {
-            lhs = op(lhs, rhs);
-            input = rest;
-        }
-
-        Ok((input, lhs))
-    }
+    nom_ext::chainl1(parse_expr, parse_op).parse(input)
 }
 
 #[cfg(test)]
 mod tests {
-
-    use std::str::FromStr;
-
-    use nom::{character::complete::alpha1, combinator::map_res};
 
     use super::*;
     #[test]
@@ -129,15 +107,5 @@ mod tests {
             parse_lambda::<()>("a(bc)"),
             Ok(("", app(var('a'), app(var('b'), var('c')))))
         );
-    }
-
-    #[test]
-    fn test_chainl1() {
-        let mut parser = chainl1::<_, _, ()>(map_res(alpha1, String::from_str), |ipt| {
-            let (ipt, _) = char('+')(ipt)?;
-            Ok((ipt, |fst: String, snd: String| format!("({}+{})", fst, snd)))
-        });
-        assert_eq!(parser("a"), Ok(("", "a".to_string())));
-        assert_eq!(parser("a+b+c"), Ok(("", "((a+b)+c)".to_string())));
     }
 }

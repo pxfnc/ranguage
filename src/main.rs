@@ -1,10 +1,10 @@
-use std::io::Write as _;
-
 mod lambda;
+mod nom_ext;
 
 use lambda::parse_lambda;
 use nom::error::convert_error;
 use nom::Finish as _;
+use std::io::Write as _;
 
 fn main() -> std::io::Result<()> {
     let mut stdout = std::io::stdout();
