@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use nom::branch::alt;
 use nom::character::complete::{char, satisfy, space0};
 use nom::combinator::{fail, value};
@@ -29,26 +30,24 @@ impl std::fmt::Display for Lambda {
 }
 
 #[allow(dead_code)]
-pub fn var(c: char) -> Lambda {
+fn var(c: char) -> Lambda {
     Lambda::Var(c)
 }
 
-pub fn abs(s: char, lambda: Lambda) -> Lambda {
+fn abs(s: char, lambda: Lambda) -> Lambda {
     Lambda::Abs(s.to_string(), Box::new(lambda))
 }
 
-pub fn app(lambda1: Lambda, lambda2: Lambda) -> Lambda {
+fn app(lambda1: Lambda, lambda2: Lambda) -> Lambda {
     Lambda::App(Box::new(lambda1), Box::new(lambda2))
 }
 
-pub fn parse_var<'a, Error: ParseError<&'a str>>(
-    input: &'a str,
-) -> IResult<&'a str, Lambda, Error> {
+fn parse_var<'a, Error: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, Lambda, Error> {
     let (input, var) = satisfy(|c| c.is_ascii_alphabetic())(input)?;
     Ok((input, Lambda::Var(var)))
 }
 
-pub fn parse_abs<'a, Error>(input: &'a str) -> IResult<&'a str, Lambda, Error>
+fn parse_abs<'a, Error>(input: &'a str) -> IResult<&'a str, Lambda, Error>
 where
     Error: ParseError<&'a str>,
 {
@@ -62,7 +61,7 @@ where
     }
 }
 
-pub fn parse_lambda<'a, Error>(input: &'a str) -> IResult<&'a str, Lambda, Error>
+fn parse_lambda<'a, Error>(input: &'a str) -> IResult<&'a str, Lambda, Error>
 where
     Error: ParseError<&'a str>,
 {
