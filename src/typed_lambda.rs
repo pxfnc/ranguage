@@ -3,7 +3,7 @@
 use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::character::complete::{alpha1, char, digit1, space0, space1};
-use nom::combinator::{self, cut, flat_map, map, map_opt, peek, value, verify};
+use nom::combinator::{self, cut, flat_map, map, map_opt, peek, success, value, verify};
 use nom::error::{context, ContextError, ParseError};
 use nom::sequence::{delimited, pair, preceded, terminated, tuple};
 use nom::{IResult, Parser};
@@ -89,7 +89,9 @@ where
 {
     context(
         "num",
-        map_opt(digit1, |s: &'a str| (s.parse::<u32>().ok()).map(Nat)),
+        map_opt(terminated(digit1, space0), |s: &'a str| {
+            (s.parse::<u32>().ok()).map(Nat)
+        }),
     )(input)
 }
 
@@ -99,10 +101,13 @@ where
 {
     context(
         "bool",
-        alt((
-            combinator::value(Bool(true), nom::bytes::complete::tag("true")),
-            combinator::value(Bool(false), nom::bytes::complete::tag("false")),
-        )),
+        terminated(
+            alt((
+                combinator::value(Bool(true), nom::bytes::complete::tag("true")),
+                combinator::value(Bool(false), nom::bytes::complete::tag("false")),
+            )),
+            space0,
+        ),
     )(input)
 }
 
@@ -112,7 +117,7 @@ where
 {
     context(
         "var",
-        map_opt(alpha1, |s: &str| {
+        map_opt(terminated(alpha1, space0), |s: &str| {
             Some(s).filter(|s| !KEYWORDS.contains(s)).map(var)
         }),
     )(input)
@@ -128,7 +133,7 @@ where
             pair(
                 delimited(
                     terminated(char('\\'), space0),
-                    map_opt(terminated(parse_var, space0), |v| match v {
+                    map_opt(parse_var, |v| match v {
                         Var(c) => Some(c),
                         _ => None,
                     }),
@@ -145,27 +150,35 @@ fn parse_prim<'a, Error>(input: &'a str) -> IResult<&'a str, LamNB, Error>
 where
     Error: ParseError<&'a str> + ContextError<&'a str>,
 {
-    context("prim", alt((parse_abs, parse_num, parse_bool, parse_var)))(input)
+    with_opt_paren(context(
+        "prim",
+        alt((parse_abs, parse_num, parse_bool, parse_var)),
+    ))
+    .parse(input)
 }
 
 fn parse_app<'a, Error>(input: &'a str) -> IResult<&'a str, LamNB, Error>
 where
     Error: ParseError<&'a str> + ContextError<&'a str>,
 {
-    context("app", chainl1(parse_prim, value(app, space1))).parse(input)
+    with_opt_paren(context(
+        "app",
+        terminated(chainl1(parse_prim, success(app)), space0),
+    ))
+    .parse(input)
 }
 
 fn parse_mul<'a, Error>(input: &'a str) -> IResult<&'a str, LamNB, Error>
 where
     Error: ParseError<&'a str> + ContextError<&'a str>,
 {
-    context(
+    with_opt_paren(context(
         "mul",
         chainl1(
             parse_app,
             combinator::value(mul, delimited(space0, char('*'), space0)),
         ),
-    )
+    ))
     .parse(input)
 }
 
@@ -173,10 +186,10 @@ fn parse_add<'a, Error>(input: &'a str) -> IResult<&'a str, LamNB, Error>
 where
     Error: ParseError<&'a str> + ContextError<&'a str>,
 {
-    context(
+    with_opt_paren(context(
         "add",
         chainl1(parse_mul, value(add, delimited(space0, char('+'), space0))),
-    )
+    ))
     .parse(input)
 }
 
@@ -189,10 +202,10 @@ where
         preceded(
             tuple((tag("if"), space1)),
             cut(flat_map(
-                terminated(parse_add, tuple((space1, tag("then"), space1))),
+                terminated(parse_add, tuple((tag("then"), space1))),
                 |cond| {
                     cut(flat_map(
-                        terminated(parse_add, tuple((space1, tag("else"), space1))),
+                        terminated(parse_add, tuple((tag("else"), space1))),
                         move |b| {
                             let cond = cond.clone();
                             cut(map(parse_lamnb, move |c| {
@@ -204,6 +217,25 @@ where
             )),
         ),
     )(input)
+}
+
+// parserをカッコ可能なものに変換する。カッコがあればコンテキストをリセットしてルートからparseし、そうでなければ引数でparseする
+fn with_opt_paren<'a, Error>(
+    parser: impl Parser<&'a str, LamNB, Error>,
+) -> impl Parser<&'a str, LamNB, Error>
+where
+    Error: ParseError<&'a str> + ContextError<&'a str>,
+{
+    alt((
+        context(
+            "paren",
+            preceded(
+                tag("("),
+                cut(delimited(space0, parse_lamnb, tuple((tag(")"), space0)))),
+            ),
+        ),
+        parser,
+    ))
 }
 
 pub fn parse_lamnb<'a, Error>(input: &'a str) -> IResult<&'a str, LamNB, Error>
@@ -237,11 +269,8 @@ mod test {
     fn run<'a, O>(
         mut p: impl Parser<&'a str, O, VerboseError<&'a str>>,
         ipt: &'a str,
-    ) -> Result<(&'a str, O), String>
-where {
-        p.parse(ipt)
-            .finish()
-            .map_err(|e| nom::error::convert_error(ipt, e))
+    ) -> Result<(&'a str, O), VerboseError<&'a str>> {
+        p.parse(ipt).finish()
     }
 
     #[test]
@@ -280,6 +309,10 @@ where {
 
         assert_eq!(run(parse_lamnb, "iff"), Ok(("", var("iff"))));
         assert_eq!(
+            run(parse_lamnb, "if cond then 1 else 2"),
+            Ok(("", if_else(var("cond"), nat(1), nat(2))))
+        );
+        assert_eq!(
             run(parse_lamnb, "if cond then 1 else \\x.x"),
             Ok(("", if_else(var("cond"), nat(1), abs("x", var("x")))))
         );
@@ -294,6 +327,34 @@ where {
         assert_eq!(
             run(parse_lamnb, "if 1 then 2 else if 3 then 4 else 5"),
             Ok(("", if_else(nat(1), nat(2), if_else(nat(3), nat(4), nat(5)))))
+        );
+
+        assert_eq!(
+            run(
+                parse_lamnb,
+                "if (if 1 then (\\x.x  ) else \\x. f g) then 2 else if 3 then 4 else 5"
+            ),
+            Ok((
+                "",
+                if_else(
+                    if_else(
+                        nat(1),
+                        abs("x", var("x")),
+                        abs("x", app(var("f"), var("g")))
+                    ),
+                    nat(2),
+                    if_else(nat(3), nat(4), nat(5))
+                )
+            ))
+        );
+
+        assert_eq!(
+            run(parse_lamnb, "f g h"),
+            Ok(("", app(app(var("f"), var("g")), var("h"))))
+        );
+        assert_eq!(
+            run(parse_lamnb, "f(g h)"),
+            Ok(("", app(var("f"), app(var("g"), var("h")))))
         );
     }
 }
