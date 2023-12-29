@@ -161,10 +161,10 @@ fn parse_app<'a, Error>(input: &'a str) -> IResult<&'a str, LamNB, Error>
 where
     Error: ParseError<&'a str> + ContextError<&'a str>,
 {
-    with_opt_paren(context(
+    context(
         "app",
-        terminated(chainl1(parse_prim, success(app)), space0),
-    ))
+        terminated(chainl1(with_opt_paren(parse_prim), success(app)), space0),
+    )
     .parse(input)
 }
 
@@ -172,13 +172,13 @@ fn parse_mul<'a, Error>(input: &'a str) -> IResult<&'a str, LamNB, Error>
 where
     Error: ParseError<&'a str> + ContextError<&'a str>,
 {
-    with_opt_paren(context(
+    context(
         "mul",
         chainl1(
             parse_app,
             combinator::value(mul, delimited(space0, char('*'), space0)),
         ),
-    ))
+    )
     .parse(input)
 }
 
@@ -186,10 +186,10 @@ fn parse_add<'a, Error>(input: &'a str) -> IResult<&'a str, LamNB, Error>
 where
     Error: ParseError<&'a str> + ContextError<&'a str>,
 {
-    with_opt_paren(context(
+    context(
         "add",
         chainl1(parse_mul, value(add, delimited(space0, char('+'), space0))),
-    ))
+    )
     .parse(input)
 }
 
@@ -341,6 +341,28 @@ mod test {
                         nat(1),
                         abs("x", var("x")),
                         abs("x", app(var("f"), var("g")))
+                    ),
+                    nat(2),
+                    if_else(nat(3), nat(4), nat(5))
+                )
+            ))
+        );
+
+        assert_eq!(
+            run(
+                parse_lamnb,
+                "if (if 1 then (\\x.x  ) else \\x. f g) v then 2 else if 3 then 4 else 5"
+            ),
+            Ok((
+                "",
+                if_else(
+                    app(
+                        if_else(
+                            nat(1),
+                            abs("x", var("x")),
+                            abs("x", app(var("f"), var("g")))
+                        ),
+                        var("v")
                     ),
                     nat(2),
                     if_else(nat(3), nat(4), nat(5))
