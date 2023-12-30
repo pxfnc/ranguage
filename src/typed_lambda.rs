@@ -26,7 +26,7 @@ pub enum LamNB {
     App(Box<LamNB>, Box<LamNB>),
     Add(Box<LamNB>, Box<LamNB>),
     Mul(Box<LamNB>, Box<LamNB>),
-    IfElse(Box<LamNB>, Box<LamNB>, Box<LamNB>),
+    IfThenElse(Box<LamNB>, Box<LamNB>, Box<LamNB>),
 }
 
 const KEYWORDS: [&str; 5] = ["if", "then", "else", "true", "false"];
@@ -45,8 +45,8 @@ pub fn var(s: impl Into<String>) -> LamNB {
     Var(s.into())
 }
 
-pub fn if_else(cond: LamNB, tr: LamNB, fls: LamNB) -> LamNB {
-    IfElse(Box::new(cond), Box::new(tr), Box::new(fls))
+pub fn if_then_else(cond: LamNB, tr: LamNB, fls: LamNB) -> LamNB {
+    IfThenElse(Box::new(cond), Box::new(tr), Box::new(fls))
 }
 
 pub fn add(lhs: LamNB, rhs: LamNB) -> LamNB {
@@ -71,7 +71,7 @@ impl std::fmt::Display for LamNB {
             Nat(n) => write!(f, "{n}"),
             Bool(b) => write!(f, "{b}"),
             Var(c) => write!(f, "{c}"),
-            IfElse(cond, tr, fls) => write!(f, "if {cond} then {tr} else {fls}"),
+            IfThenElse(cond, tr, fls) => write!(f, "if {cond} then {tr} else {fls}"),
             Add(lhs, rhs) => write!(f, "{} + {}", lhs, rhs),
             Mul(lhs, rhs) => write!(f, "{lhs} × {rhs}"),
             Abs(s, lambda) => write!(f, "λ{}.{}", s, lambda),
@@ -211,7 +211,7 @@ where
                     preceded(tuple((tag("else"), space1)), parse_lamnb),
                 ),
             )),
-            |(cond, t_expr, f_expr)| if_else(cond, t_expr, f_expr),
+            |(cond, t_expr, f_expr)| if_then_else(cond, t_expr, f_expr),
         ),
     )(input)
 }
@@ -302,37 +302,43 @@ mod test {
         assert_eq!(run("iff"), Ok(("", var("iff"))));
         assert_eq!(
             run("if cond then 1 else 2"),
-            Ok(("", if_else(var("cond"), nat(1), nat(2))))
+            Ok(("", if_then_else(var("cond"), nat(1), nat(2))))
         );
         assert_eq!(
             run("if cond then 1 else \\x.x"),
-            Ok(("", if_else(var("cond"), nat(1), abs("x", var("x")))))
+            Ok(("", if_then_else(var("cond"), nat(1), abs("x", var("x")))))
         );
         assert_eq!(
             run("\\cond. if cond then 1 else \\x.x"),
             Ok((
                 "",
-                abs("cond", if_else(var("cond"), nat(1), abs("x", var("x"))))
+                abs(
+                    "cond",
+                    if_then_else(var("cond"), nat(1), abs("x", var("x")))
+                )
             ))
         );
 
         assert_eq!(
             run("if 1 then 2 else if 3 then 4 else 5"),
-            Ok(("", if_else(nat(1), nat(2), if_else(nat(3), nat(4), nat(5)))))
+            Ok((
+                "",
+                if_then_else(nat(1), nat(2), if_then_else(nat(3), nat(4), nat(5)))
+            ))
         );
 
         assert_eq!(
             run("if (if 1 then (\\x.x  ) else \\x. f g) then 2 else if 3 then 4 else 5"),
             Ok((
                 "",
-                if_else(
-                    if_else(
+                if_then_else(
+                    if_then_else(
                         nat(1),
                         abs("x", var("x")),
                         abs("x", app(var("f"), var("g")))
                     ),
                     nat(2),
-                    if_else(nat(3), nat(4), nat(5))
+                    if_then_else(nat(3), nat(4), nat(5))
                 )
             ))
         );
@@ -341,10 +347,10 @@ mod test {
             run("if (f) v then 2 else if 3 then 4 else 5"),
             Ok((
                 "",
-                if_else(
+                if_then_else(
                     app(var("f"), var("v")),
                     nat(2),
-                    if_else(nat(3), nat(4), nat(5))
+                    if_then_else(nat(3), nat(4), nat(5))
                 )
             ))
         );
@@ -353,9 +359,9 @@ mod test {
             run("if (if 1 then (\\x.x  ) else \\x. f g) v then 2 else if 3 then 4 else 5"),
             Ok((
                 "",
-                if_else(
+                if_then_else(
                     app(
-                        if_else(
+                        if_then_else(
                             nat(1),
                             abs("x", var("x")),
                             abs("x", app(var("f"), var("g")))
@@ -363,7 +369,7 @@ mod test {
                         var("v")
                     ),
                     nat(2),
-                    if_else(nat(3), nat(4), nat(5))
+                    if_then_else(nat(3), nat(4), nat(5))
                 )
             ))
         );
