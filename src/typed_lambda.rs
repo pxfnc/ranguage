@@ -3,7 +3,7 @@
 use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::character::complete::{alpha1, char, digit1, space0, space1};
-use nom::combinator::{self, cut, flat_map, map, map_opt, peek, success, value, verify};
+use nom::combinator::{self, cut, eof, map, map_opt, peek, success, value, verify};
 use nom::error::{context, ContextError, ParseError};
 use nom::sequence::{delimited, pair, preceded, terminated, tuple};
 use nom::{IResult, Parser};
@@ -22,11 +22,11 @@ pub enum LamNB {
     Nat(u32),
     Bool(bool),
     Var(String),
-    IfElse(Box<LamNB>, Box<LamNB>, Box<LamNB>),
-    Add(Box<LamNB>, Box<LamNB>),
-    Mul(Box<LamNB>, Box<LamNB>),
     Abs(String, Box<LamNB>),
     App(Box<LamNB>, Box<LamNB>),
+    Add(Box<LamNB>, Box<LamNB>),
+    Mul(Box<LamNB>, Box<LamNB>),
+    IfElse(Box<LamNB>, Box<LamNB>, Box<LamNB>),
 }
 
 const KEYWORDS: [&str; 5] = ["if", "then", "else", "true", "false"];
@@ -199,22 +199,19 @@ where
 {
     context(
         "ifelse",
-        preceded(
-            tuple((tag("if"), space1)),
-            cut(flat_map(
-                terminated(parse_add, tuple((tag("then"), space1))),
-                |cond| {
-                    cut(flat_map(
-                        terminated(parse_add, tuple((tag("else"), space1))),
-                        move |b| {
-                            let cond = cond.clone();
-                            cut(map(parse_lamnb, move |c| {
-                                if_else(cond.clone(), b.clone(), c)
-                            }))
-                        },
-                    ))
-                },
+        map(
+            tuple((
+                context("if(cond)", preceded(tuple((tag("if"), space1)), parse_add)),
+                context(
+                    "if(then)",
+                    preceded(tuple((tag("then"), space1)), parse_add),
+                ),
+                context(
+                    "if(else)",
+                    preceded(tuple((tag("else"), space1)), parse_lamnb),
+                ),
             )),
+            |(cond, t_expr, f_expr)| if_else(cond, t_expr, f_expr),
         ),
     )(input)
 }
@@ -229,9 +226,10 @@ where
     alt((
         context(
             "paren",
-            preceded(
-                tag("("),
-                cut(delimited(space0, parse_lamnb, tuple((tag(")"), space0)))),
+            delimited(
+                tuple((tag("("), space0)),
+                parse_lamnb,
+                tuple((tag(")"), space0)),
             ),
         ),
         parser,
@@ -244,8 +242,7 @@ where
 {
     context(
         "lamnb",
-        delimited(
-            space0,
+        terminated(
             alt((
                 preceded(
                     verify(peek(alpha1), |s: &str| s == "if"),
@@ -258,6 +255,16 @@ where
     )(input)
 }
 
+pub fn parse_program<'a, Error>(input: &'a str) -> IResult<&'a str, LamNB, Error>
+where
+    Error: ParseError<&'a str> + ContextError<&'a str>,
+{
+    context(
+        "program",
+        delimited(space0, parse_lamnb, tuple((space0, eof))),
+    )(input)
+}
+
 #[cfg(test)]
 mod test {
 
@@ -266,58 +273,43 @@ mod test {
 
     use super::*;
 
-    fn run<'a, O>(
-        mut p: impl Parser<&'a str, O, VerboseError<&'a str>>,
-        ipt: &'a str,
-    ) -> Result<(&'a str, O), VerboseError<&'a str>> {
-        p.parse(ipt).finish()
+    fn run<'a>(ipt: &'a str) -> Result<(&'a str, LamNB), VerboseError<&'a str>> {
+        parse_program(ipt).finish()
     }
 
     #[test]
     fn test_parse() {
-        assert_eq!(run(parse_lamnb, "1"), Ok(("", nat(1))));
-        assert_eq!(run(parse_lamnb, "123"), Ok(("", nat(123))));
-        assert_eq!(run(parse_lamnb, "    v  "), Ok(("", var("v".to_string()))));
+        assert_eq!(run("1"), Ok(("", nat(1))));
+        assert_eq!(run("123"), Ok(("", nat(123))));
+        assert_eq!(run("    v  "), Ok(("", var("v".to_string()))));
         assert_eq!(
-            run(parse_lamnb, "  1 +   2 + 3 "),
+            run("  1 +   2 + 3 "),
             Ok(("", add(add(nat(1), nat(2)), nat(3))))
         );
-        assert_eq!(
-            run(parse_lamnb, "1*2+3"),
-            Ok(("", add(mul(nat(1), nat(2)), nat(3))))
-        );
-        assert_eq!(
-            run(parse_lamnb, "1 +2   *3"),
-            Ok(("", add(nat(1), mul(nat(2), nat(3)))))
-        );
+        assert_eq!(run("1*2+3"), Ok(("", add(mul(nat(1), nat(2)), nat(3)))));
+        assert_eq!(run("1 +2   *3"), Ok(("", add(nat(1), mul(nat(2), nat(3))))));
 
-        assert_eq!(run(parse_lamnb, "\\x.x"), Ok(("", abs("x", var("x")))));
-        assert_eq!(
-            run(parse_lamnb, "  \\  x .  x  "),
-            Ok(("", abs("x", var("x"))))
-        );
+        assert_eq!(run("\\x.x"), Ok(("", abs("x", var("x")))));
+        assert_eq!(run("  \\  x .  x  "), Ok(("", abs("x", var("x")))));
+
+        assert_eq!(run("\\x.x+2"), Ok(("", abs("x", add(var("x"), nat(2))))));
 
         assert_eq!(
-            run(parse_lamnb, "\\x.x+2"),
-            Ok(("", abs("x", add(var("x"), nat(2)))))
-        );
-
-        assert_eq!(
-            run(parse_lamnb, "f \\x.f x"),
+            run("f \\x.f x"),
             Ok(("", app(var("f"), abs("x", app(var("f"), var("x"))))))
         );
 
-        assert_eq!(run(parse_lamnb, "iff"), Ok(("", var("iff"))));
+        assert_eq!(run("iff"), Ok(("", var("iff"))));
         assert_eq!(
-            run(parse_lamnb, "if cond then 1 else 2"),
+            run("if cond then 1 else 2"),
             Ok(("", if_else(var("cond"), nat(1), nat(2))))
         );
         assert_eq!(
-            run(parse_lamnb, "if cond then 1 else \\x.x"),
+            run("if cond then 1 else \\x.x"),
             Ok(("", if_else(var("cond"), nat(1), abs("x", var("x")))))
         );
         assert_eq!(
-            run(parse_lamnb, "\\cond. if cond then 1 else \\x.x"),
+            run("\\cond. if cond then 1 else \\x.x"),
             Ok((
                 "",
                 abs("cond", if_else(var("cond"), nat(1), abs("x", var("x"))))
@@ -325,15 +317,12 @@ mod test {
         );
 
         assert_eq!(
-            run(parse_lamnb, "if 1 then 2 else if 3 then 4 else 5"),
+            run("if 1 then 2 else if 3 then 4 else 5"),
             Ok(("", if_else(nat(1), nat(2), if_else(nat(3), nat(4), nat(5)))))
         );
 
         assert_eq!(
-            run(
-                parse_lamnb,
-                "if (if 1 then (\\x.x  ) else \\x. f g) then 2 else if 3 then 4 else 5"
-            ),
+            run("if (if 1 then (\\x.x  ) else \\x. f g) then 2 else if 3 then 4 else 5"),
             Ok((
                 "",
                 if_else(
@@ -349,10 +338,19 @@ mod test {
         );
 
         assert_eq!(
-            run(
-                parse_lamnb,
-                "if (if 1 then (\\x.x  ) else \\x. f g) v then 2 else if 3 then 4 else 5"
-            ),
+            run("if (f) v then 2 else if 3 then 4 else 5"),
+            Ok((
+                "",
+                if_else(
+                    app(var("f"), var("v")),
+                    nat(2),
+                    if_else(nat(3), nat(4), nat(5))
+                )
+            ))
+        );
+
+        assert_eq!(
+            run("if (if 1 then (\\x.x  ) else \\x. f g) v then 2 else if 3 then 4 else 5"),
             Ok((
                 "",
                 if_else(
@@ -371,12 +369,18 @@ mod test {
         );
 
         assert_eq!(
-            run(parse_lamnb, "f g h"),
+            run("f g h"),
             Ok(("", app(app(var("f"), var("g")), var("h"))))
         );
+
         assert_eq!(
-            run(parse_lamnb, "f(g h)"),
+            run("f(g h)"),
             Ok(("", app(var("f"), app(var("g"), var("h")))))
+        );
+
+        assert_eq!(
+            run("(f g)h"),
+            Ok(("", app(app(var("f"), var("g")), var("h"))))
         );
     }
 }

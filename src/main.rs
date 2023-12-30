@@ -16,7 +16,7 @@ fn main() -> std::io::Result<()> {
         stdin.read_line(&mut buff)?;
         let i = buff.as_str().trim();
         println!("input -> {:?}", i);
-        match typed_lambda::parse_lamnb(i).finish() {
+        match typed_lambda::parse_program(i).finish() {
             Ok((rest, lambda)) => println!(
                 "result -> {}\nast -> {:?}\nrest -> {:?}",
                 lambda, lambda, rest
