@@ -27,9 +27,10 @@ pub enum LamNB {
     Add(Box<LamNB>, Box<LamNB>),
     Mul(Box<LamNB>, Box<LamNB>),
     IfThenElse(Box<LamNB>, Box<LamNB>, Box<LamNB>),
+    LetIn(String, Box<LamNB>, Box<LamNB>),
 }
 
-const KEYWORDS: [&str; 5] = ["if", "then", "else", "true", "false"];
+const KEYWORDS: [&str; 6] = ["if", "then", "else", "true", "false", "in"];
 
 use LamNB::*;
 
@@ -65,6 +66,10 @@ pub fn app(lambda1: LamNB, lambda2: LamNB) -> LamNB {
     App(Box::new(lambda1), Box::new(lambda2))
 }
 
+pub fn let_in(name: impl Into<String>, expr: LamNB, rest: LamNB) -> LamNB {
+    LetIn(name.into(), Box::new(expr), Box::new(rest))
+}
+
 impl std::fmt::Display for LamNB {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -79,6 +84,7 @@ impl std::fmt::Display for LamNB {
                 app @ App(..) => write!(f, "{} ({})", lambda1, app),
                 _ => write!(f, "{} {}", lambda1, lambda2),
             },
+            LetIn(name, expr, rest) => write!(f, "let {} = {} in {}", name, expr, rest),
         }
     }
 }
@@ -201,10 +207,13 @@ where
         "ifelse",
         map(
             tuple((
-                context("if(cond)", preceded(tuple((tag("if"), space1)), parse_add)),
+                context(
+                    "if(cond)",
+                    preceded(tuple((tag("if"), space1)), parse_lamnb),
+                ),
                 context(
                     "if(then)",
-                    preceded(tuple((tag("then"), space1)), parse_add),
+                    preceded(tuple((tag("then"), space1)), parse_lamnb),
                 ),
                 context(
                     "if(else)",
@@ -212,6 +221,29 @@ where
                 ),
             )),
             |(cond, t_expr, f_expr)| if_then_else(cond, t_expr, f_expr),
+        ),
+    )(input)
+}
+
+fn parse_let_in<'a, Error>(input: &'a str) -> IResult<&'a str, LamNB, Error>
+where
+    Error: ParseError<&'a str> + ContextError<&'a str>,
+{
+    context(
+        "let_in",
+        map(
+            tuple((
+                context(
+                    "let(name)",
+                    preceded(tuple((tag("let"), space1)), parse_var),
+                ),
+                context(
+                    "let(expr)",
+                    preceded(tuple((tag("="), space1)), parse_lamnb),
+                ),
+                context("let(in)", preceded(tuple((tag("in"), space1)), parse_lamnb)),
+            )),
+            |(name, expr, rest)| LetIn(name.to_string(), Box::new(expr), Box::new(rest)),
         ),
     )(input)
 }
@@ -247,6 +279,10 @@ where
                 preceded(
                     verify(peek(alpha1), |s: &str| s == "if"),
                     cut(parse_if_else),
+                ),
+                preceded(
+                    verify(peek(alpha1), |s: &str| s == "let"),
+                    cut(parse_let_in),
                 ),
                 parse_add,
             )),
@@ -387,6 +423,33 @@ mod test {
         assert_eq!(
             run("(f g)h"),
             Ok(("", app(app(var("f"), var("g")), var("h"))))
+        );
+
+        assert_eq!(
+            run("let a = \\b. if b then true else false in b"),
+            Ok((
+                "",
+                let_in(
+                    "a",
+                    abs("b", if_then_else(var("b"), bool(true), bool(false))),
+                    var("b")
+                )
+            ))
+        );
+
+        assert_eq!(
+            run("let a = \\b. if let x = x in x  then true else false in b"),
+            Ok((
+                "",
+                let_in(
+                    "a",
+                    abs(
+                        "b",
+                        if_then_else(let_in("x", var("x"), var("x")), bool(true), bool(false))
+                    ),
+                    var("b")
+                )
+            ))
         );
     }
 }
